@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Passport Photo Camera</title>
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="theme-color" content="#1d5fd6">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png">
+<style>
+:root{--bg:#f3f1ec;--card:#fffefb;--tx:#16191f;--mut:#5d6572;--ac:#1d5fd6;--bd:#d8d4ca;--ok:#18794e;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#14171c;--card:#1d2128;--tx:#eef0f3;--mut:#9ba5b3;--ac:#6ea2ff;--bd:#2d343e;--ok:#4cc38a}}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.5 "Segoe UI",Roboto,system-ui,sans-serif}
+main{max-width:880px;margin:0 auto;padding:16px;display:grid;gap:16px}
+h1{font:700 1.5rem/1.2 Georgia,"Times New Roman",serif;margin:8px 0 0}
+p.sub{margin:4px 0 0;color:var(--mut)}
+.grid{display:grid;gap:16px;grid-template-columns:1fr}
+@media(min-width:720px){.grid{grid-template-columns:1fr 1fr}}
+section{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:14px}
+h2{font-size:1rem;margin:0 0 10px}
+video,#out{width:100%;max-width:300px;display:block;margin:0 auto;border-radius:6px;background:#000}
+#out{background:#fff;border:1px solid var(--bd);max-width:280px}
+.row{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}
+button,.btn,select{font:inherit;padding:10px 14px;border-radius:8px;border:1px solid var(--bd);background:var(--card);color:var(--tx);cursor:pointer}
+button.p{background:var(--ac);color:#fff;border-color:var(--ac);font-weight:600}
+button:disabled{opacity:.5}
+button:focus-visible,.btn:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid var(--ac);outline-offset:2px}
+label{display:grid;gap:2px;font-size:.9rem;color:var(--mut);margin-top:10px}
+input[type=range]{width:100%}
+.sw{display:flex;gap:14px;margin-top:10px}.sw label{display:flex;align-items:center;gap:6px;margin:0;color:var(--tx)}
+.chk{display:flex!important;align-items:center;gap:6px;color:var(--tx)}
+.info{margin-top:10px;font-weight:600}.ok{color:var(--ok)}
+small{color:var(--mut)}
+</style></head>
+<body><main>
+<header><h1>Passport photo camera</h1>
+<p class="sub">Take a photo against a plain wall. It becomes a passport-size picture with a clean solid background, under 200 KB.</p></header>
+<div class="grid">
+<section><h2>1. Take the photo</h2>
+<video id="v" playsinline muted hidden></video>
+<div class="row">
+<button class="p" id="camOn">Open camera</button>
+<button id="snap" hidden>Capture</button>
+<button id="flip" hidden>Switch camera</button>
+<label class="btn" style="margin:0;display:inline-block;color:var(--tx)">Use phone camera app / gallery
+<input type="file" id="file" accept="image/*" capture="user" hidden></label>
+</div>
+<p id="msg"><small>Tip: stand 1 m from a plain wall, face the light, look straight at the camera, keep both shoulders in view.</small></p>
+</section>
+<section><h2>2. Adjust and save</h2>
+<canvas id="out" width="413" height="531"></canvas>
+<div class="row"><label style="margin:0">Photo size
+<select id="size"><option value="35x45">35 × 45 mm (India passport)</option><option value="2x2">2 × 2 inch (US / OCI)</option><option value="33x48">33 × 48 mm</option></select></label></div>
+<div class="sw">
+<label><input type="radio" name="bg" value="#ffffff" checked> White</label>
+<label><input type="radio" name="bg" value="#c2dcf5"> Light blue</label></div>
+<label class="chk"><input type="checkbox" id="rm" checked> Replace background</label>
+<label class="chk"><input type="checkbox" id="enh" checked> Enhance light and sharpness</label>
+<label id="tolL" hidden>Background sensitivity (basic mode)<input type="range" id="tol" min="8" max="90" value="34"></label>
+<label>Zoom<input type="range" id="zoom" min="0.8" max="2" step="0.01" value="1"></label>
+<label>Move left / right<input type="range" id="px" min="-100" max="100" value="0"></label>
+<label>Move up / down<input type="range" id="py" min="-100" max="100" value="0"></label>
+<div class="info" id="info"></div>
+<div class="row"><button class="p" id="save" disabled>Save photo</button></div>
+<p><small>If saving does not start, press and hold the picture below and choose “Save image”.</small></p>
+<img id="res" alt="Final passport photo" style="max-width:200px;display:none;margin:0 auto;border:1px solid var(--bd)">
+</section></div></main>
+<script>
+const $=id=>document.getElementById(id);
+const out=$('out'),ctx=out.getContext('2d',{willReadFrequently:true});
+const SIZES={'35x45':[413,531],'2x2':[600,600],'33x48':[390,567]};
+const VB='https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14';
+const MD='https://storage.googleapis.com/mediapipe-models/';
+let src=null,stream=null,facing='user',blob=null,timer=0,busy=0,ai=null,person=null,face=null;
+const msg=t=>{$('msg').innerHTML='<small>'+t+'</small>'};
+const cl=(v,a,b)=>Math.max(a,Math.min(b,v));
+
+async function startCam(){
+  try{
+    if(stream)stream.getTracks().forEach(t=>t.stop());
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:facing,width:{ideal:1920},height:{ideal:1920}},audio:false});
+    const v=$('v');v.srcObject=stream;v.hidden=false;await v.play();
+    v.style.transform=facing==='user'?'scaleX(-1)':'none';
+    $('snap').hidden=false;$('flip').hidden=false;$('camOn').hidden=true;
+  }catch(e){msg('Camera could not open. Use the “phone camera app / gallery” button instead.')}
+}
+$('camOn').onclick=startCam;
+$('flip').onclick=()=>{facing=facing==='user'?'environment':'user';startCam()};
+$('snap').onclick=()=>{
+  const v=$('v'),c=document.createElement('canvas');
+  c.width=v.videoWidth;c.height=v.videoHeight;c.getContext('2d').drawImage(v,0,0);setSrc(c);
+};
+$('file').onchange=async e=>{
+  const f=e.target.files[0];if(!f)return;
+  const im=new Image();im.src=URL.createObjectURL(f);
+  try{await im.decode()}catch(_){return}
+  setSrc(im);
+};
+function setSrc(el){
+  const w=el.naturalWidth||el.width,h=el.naturalHeight||el.height,s=Math.min(1,1280/Math.max(w,h));
+  const c=document.createElement('canvas');c.width=Math.round(w*s);c.height=Math.round(h*s);
+  c.getContext('2d').drawImage(el,0,0,c.width,c.height);
+  src=c;$('zoom').value=1;$('px').value=0;$('py').value=0;
+  analyze().then(render);
+}
+
+async function loadAI(){
+  if(ai)return ai;
+  try{
+    const V=await import(VB+'/vision_bundle.mjs');
+    const fs=await V.FilesetResolver.forVisionTasks(VB+'/wasm');
+    const seg=await V.ImageSegmenter.createFromOptions(fs,{baseOptions:{modelAssetPath:MD+'image_segmenter/selfie_multiclass_256x256/float32/latest/selfie_multiclass_256x256.tflite',delegate:'CPU'},runningMode:'IMAGE',outputConfidenceMasks:true,outputCategoryMask:false});
+    let fd=null;
+    try{fd=await V.FaceDetector.createFromOptions(fs,{baseOptions:{modelAssetPath:MD+'face_detector/blaze_face_short_range/float16/latest/blaze_face_short_range.tflite',delegate:'CPU'},runningMode:'IMAGE'})}catch(_){}
+    ai={seg,fd};
+  }catch(e){ai=null}
+  return ai;
+}
+
+async function analyze(){
+  person=null;face=null;
+  msg('Analysing photo… the first time this downloads a small AI model (about 10 MB).');
+  const A=await loadAI();
+  if(A){
+    try{
+      const r=A.seg.segment(src),m=r.confidenceMasks[0],bgp=m.getAsFloat32Array(),mw=m.width,mh=m.height;
+      const mc=document.createElement('canvas');mc.width=mw;mc.height=mh;
+      const mx=mc.getContext('2d'),id=mx.createImageData(mw,mh);
+      for(let i=0;i<mw*mh;i++){const v=Math.round(255*cl(1-bgp[i],0,1));id.data[4*i]=id.data[4*i+1]=id.data[4*i+2]=v;id.data[4*i+3]=255}
+      mx.putImageData(id,0,0);r.close();
+      person={c:mc,w:mw,h:mh};
+      const det=A.fd&&A.fd.detect(src).detections[0];
+      if(det){
+        const b=det.boundingBox,x0=Math.max(0,Math.floor((b.originX-b.width*.5)*mw/src.width)),x1=Math.min(mw-1,Math.ceil((b.originX+b.width*1.5)*mw/src.width));
+        let top=null;
+        for(let y=0;y<mh&&top===null;y++){let n=0;for(let x=x0;x<=x1;x++)if(bgp[y*mw+x]<.5)n++;if(n>=3)top=y*src.height/mh}
+        let crown=top===null?b.originY-b.height*.45:Math.max(top,b.originY-b.height*.9);
+        crown=Math.min(crown,b.originY);
+        face={cx:b.originX+b.width/2,crown,chin:b.originY+b.height*1.05};
+      }
+      $('tolL').hidden=true;
+      msg('Smart cut-out is on. Check the edges, then adjust zoom or position if needed.');
+    }catch(e){person=null}
+  }
+  if(!person){$('tolL').hidden=false;msg('Basic cut-out is on (the AI model could not load, so connect to the internet once). Use a plain wall and adjust sensitivity.')}
+}
+
+function cropRect(W,H){
+  const ar=W/H,sw=src.width,sh=src.height;let cw,ch,cx,cy;
+  if(face){ch=(face.chin-face.crown)/.72;cw=ch*ar;cx=face.cx-cw/2;cy=face.crown-.1*ch}
+  else{cw=Math.min(sw,sh*ar);ch=cw/ar;cx=(sw-cw)/2;cy=(sh-ch)/2}
+  const z=+$('zoom').value;
+  const mx=cx+cw/2+(+$('px').value/100)*cw/2,my=cy+ch/2+(+$('py').value/100)*ch/2;
+  cw/=z;ch/=z;cx=mx-cw/2;cy=my-ch/2;
+  cx=cw<=sw?cl(cx,0,sw-cw):(sw-cw)/2;cy=ch<=sh?cl(cy,0,sh-ch):(sh-ch)/2;
+  return [cx,cy,cw,ch];
+}
+
+function boxF(s,W,H,r){
+  const t=new Float32Array(s.length),o=new Float32Array(s.length),c=new Float64Array(Math.max(W,H)+1);
+  for(let y=0;y<H;y++){c[0]=0;for(let x=0;x<W;x++)c[x+1]=c[x]+s[y*W+x];
+    for(let x=0;x<W;x++){const a=Math.max(0,x-r),b=Math.min(W-1,x+r);t[y*W+x]=(c[b+1]-c[a])/(b-a+1)}}
+  for(let x=0;x<W;x++){c[0]=0;for(let y=0;y<H;y++)c[y+1]=c[y]+t[y*W+x];
+    for(let y=0;y<H;y++){const a=Math.max(0,y-r),b=Math.min(H-1,y+r);o[y*W+x]=(c[b+1]-c[a])/(b-a+1)}}
+  return o;
+}
+function guided(I,P,W,H,r,eps){
+  const N=I.length,mI=boxF(I,W,H,r),mP=boxF(P,W,H,r),II=new Float32Array(N),IP=new Float32Array(N);
+  for(let i=0;i<N;i++){II[i]=I[i]*I[i];IP[i]=I[i]*P[i]}
+  const cII=boxF(II,W,H,r),cIP=boxF(IP,W,H,r),A=new Float32Array(N),B=new Float32Array(N);
+  for(let i=0;i<N;i++){const v=cII[i]-mI[i]*mI[i],cv=cIP[i]-mI[i]*mP[i];A[i]=cv/(v+eps);B[i]=mP[i]-A[i]*mI[i]}
+  const mA=boxF(A,W,H,r),mB=boxF(B,W,H,r),Q=new Float32Array(N);
+  for(let i=0;i<N;i++)Q[i]=mA[i]*I[i]+mB[i];
+  return Q;
+}
+
+function floodAlpha(d,W,H){
+  let r=0,g=0,b=0,n=0;
+  const add=(x,y)=>{const i=(y*W+x)*4;r+=d[i];g+=d[i+1];b+=d[i+2];n++};
+  for(let x=0;x<W;x+=4)add(x,2);
+  for(let y=0;y<H*.4;y+=4){add(2,y);add(W-3,y)}
+  r/=n;g/=n;b/=n;
+  const t=+$('tol').value,t2=t*t*3;
+  const near=p=>{const i=p*4,a=d[i]-r,c=d[i+1]-g,e=d[i+2]-b;return a*a+c*c+e*e<t2};
+  const m=new Uint8Array(W*H),st=new Int32Array(W*H);let sp=0;
+  const push=p=>{if(!m[p]&&near(p)){m[p]=1;st[sp++]=p}};
+  for(let x=0;x<W;x++)push(x);
+  for(let y=0;y<H;y++){push(y*W);push(y*W+W-1)}
+  while(sp){const p=st[--sp],x=p%W,y=(p/W)|0;
+    if(x>0)push(p-1);if(x<W-1)push(p+1);if(y>0)push(p-W);if(y<H-1)push(p+W)}
+  const f=new Float32Array(W*H);for(let p=0;p<f.length;p++)f[p]=1-m[p];
+  return boxF(f,W,H,2);
+}
+
+function composite(W,H,bgc,cx,cy,cw,ch){
+  const im=ctx.getImageData(0,0,W,H),d=im.data,N=W*H,L=new Float32Array(N);
+  for(let p=0;p<N;p++)L[p]=(.299*d[4*p]+.587*d[4*p+1]+.114*d[4*p+2])/255;
+  let a0;
+  if(person){
+    const mc=document.createElement('canvas');mc.width=W;mc.height=H;
+    const mx=mc.getContext('2d',{willReadFrequently:true});
+    mx.fillStyle='#000';mx.fillRect(0,0,W,H);mx.imageSmoothingQuality='high';
+    const kx=person.w/src.width,ky=person.h/src.height;
+    mx.drawImage(person.c,cx*kx,cy*ky,cw*kx,ch*ky,0,0,W,H);
+    const md=mx.getImageData(0,0,W,H).data;a0=new Float32Array(N);
+    for(let p=0;p<N;p++)a0[p]=md[4*p]/255;
+  }else a0=floodAlpha(d,W,H);
+  const q=guided(L,a0,W,H,Math.max(4,Math.round(W*.02)),5e-4),a=new Float32Array(N);
+  for(let p=0;p<N;p++)a[p]=cl((q[p]-.52)*2.4+.5,0,1);
+  let br=0,bg=0,bb=0,n=0;
+  for(let p=0;p<N;p+=5)if(a[p]<.02){br+=d[4*p];bg+=d[4*p+1];bb+=d[4*p+2];n++}
+  if(n<50){br=bg=bb=235}else{br/=n;bg/=n;bb/=n}
+  const enh=$('enh').checked;let lo=0,g=1,sh=null;
+  if(enh){
+    const h=new Uint32Array(256);let c=0;
+    for(let p=0;p<N;p++)if(a[p]>.95){h[Math.round(L[p]*255)]++;c++}
+    if(c>500){let s=0,i=0;while(i<255&&s<c*.01)s+=h[i++];lo=i;s=0;i=255;while(i>0&&s<c*.01)s+=h[i--];g=cl(235/Math.max(40,i-lo),.9,1.3)}
+    const lb=boxF(L,W,H,1);sh=new Float32Array(N);
+    for(let p=0;p<N;p++)sh[p]=(L[p]-lb[p])*255*.7;
+  }
+  const R0=parseInt(bgc.slice(1,3),16),G0=parseInt(bgc.slice(3,5),16),B0=parseInt(bgc.slice(5,7),16);
+  for(let p=0;p<N;p++){
+    const i=4*p,k=a[p];
+    if(k<.003){d[i]=R0;d[i+1]=G0;d[i+2]=B0;continue}
+    let R=d[i],G=d[i+1],B=d[i+2];
+    if(k<.98&&k>.15){R=cl((R-(1-k)*br)/k,0,255);G=cl((G-(1-k)*bg)/k,0,255);B=cl((B-(1-k)*bb)/k,0,255)}
+    if(enh){
+      R=R*.4+.6*((R-lo)*g+10)+sh[p];G=G*.4+.6*((G-lo)*g+10)+sh[p];B=B*.4+.6*((B-lo)*g+10)+sh[p];
+    }
+    d[i]=cl(R,0,255)*k+R0*(1-k);d[i+1]=cl(G,0,255)*k+G0*(1-k);d[i+2]=cl(B,0,255)*k+B0*(1-k);
+  }
+  ctx.putImageData(im,0,0);
+}
+
+function render(){
+  if(!src)return;
+  const [W,H]=SIZES[$('size').value];out.width=W;out.height=H;
+  const [cx,cy,cw,ch]=cropRect(W,H),bgc=document.querySelector('input[name=bg]:checked').value;
+  ctx.fillStyle=bgc;ctx.fillRect(0,0,W,H);
+  ctx.imageSmoothingQuality='high';
+  ctx.drawImage(src,cx,cy,cw,ch,0,0,W,H);
+  if($('rm').checked)composite(W,H,bgc,cx,cy,cw,ch);
+  clearTimeout(timer);timer=setTimeout(compress,300);
+}
+
+const toBlob=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
+async function compress(){
+  const id=++busy;let c=out,scale=1,best=null;
+  for(let k=0;k<6&&!best;k++){
+    if(scale<1){c=document.createElement('canvas');c.width=Math.round(out.width*scale);c.height=Math.round(out.height*scale);c.getContext('2d').drawImage(out,0,0,c.width,c.height)}
+    let lo=.3,hi=.97;
+    for(let i=0;i<7;i++){const q=(lo+hi)/2,b=await toBlob(c,q);if(b.size<=195000){best=b;lo=q}else hi=q}
+    scale*=.85;
+  }
+  if(id!==busy||!best)return;
+  blob=best;
+  $('info').innerHTML='<span class="ok">'+Math.round(best.size/1024)+' KB</span> · '+out.width+' × '+out.height+' px (under 200 KB)';
+  $('save').disabled=false;
+  const r=$('res');r.src=URL.createObjectURL(best);r.style.display='block';
+}
+
+$('save').onclick=async()=>{
+  if(!blob)return;
+  const file=new File([blob],'passport-photo.jpg',{type:'image/jpeg'});
+  try{if(navigator.canShare&&navigator.canShare({files:[file]})){await navigator.share({files:[file]});return}}catch(_){}
+  const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='passport-photo.jpg';a.click();
+};
+['size','rm','enh','tol','zoom','px','py'].forEach(id=>$(id).addEventListener('input',render));
+document.querySelectorAll('input[name=bg]').forEach(e=>e.addEventListener('change',render));
+if('serviceWorker' in navigator){addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}))}
+</script></body></html>
